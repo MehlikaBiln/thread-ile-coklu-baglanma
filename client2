@@ -1,0 +1,127 @@
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.io.*;
+import java.net.*;
+
+public class TCPClientGUI extends JFrame {
+    private JTextField hostField;
+    private JTextField portField;
+    private JTextArea messageArea;
+    private JTextField inputField;
+    private JButton sendButton;
+    private Socket socket;
+    private PrintWriter out;
+    private BufferedReader in;
+    private boolean connected;
+    private String userName;
+
+    public TCPClientGUI() {
+        setTitle("TCP Client");
+        setSize(500, 500);
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setLayout(new BorderLayout());
+
+        messageArea = new JTextArea();
+        messageArea.setEditable(false);
+        JScrollPane scrollPane = new JScrollPane(messageArea);
+        add(scrollPane, BorderLayout.CENTER);
+
+        JPanel bottomPanel = new JPanel(new BorderLayout());
+        inputField = new JTextField();
+        sendButton = new JButton("gonder");
+        bottomPanel.add(inputField, BorderLayout.CENTER);
+        bottomPanel.add(sendButton, BorderLayout.EAST);
+
+        add(bottomPanel, BorderLayout.SOUTH);
+
+        sendButton.addActionListener(new ActionListener() {
+            public void actionPerformed(ActionEvent e) {
+                sendMessage();
+            }
+        });
+
+        inputField.addActionListener(new ActionListener() {
+            public void actionPerformed(ActionEvent e) {
+                sendMessage();
+            }
+        });
+
+        connectToServer();
+    }
+
+    private void sendMessage() {
+        if (connected) {
+            String message = inputField.getText();
+            out.println(message);
+            inputField.setText("");
+        } else {
+            connectToServer();
+        }
+    }
+
+    private void connectToServer() {
+        while (!connected) {
+            String host = JOptionPane.showInputDialog(this, "Sunucu IP adresini girin:", "localhost");
+            if (host == null) {
+                System.exit(0); // Kullanıcı iptal ettiyse programı kapat
+            }
+            String portStr = JOptionPane.showInputDialog(this, "Port numarasını girin:", "4444");
+            if (portStr == null) {
+                System.exit(0); // Kullanıcı iptal ettiyse programı kapat
+            }
+
+            try {
+                int port = Integer.parseInt(portStr);
+                socket = new Socket(host, port);
+                out = new PrintWriter(socket.getOutputStream(), true);
+                in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                while (true) {
+                    userName = JOptionPane.showInputDialog(this, "Kullanıcı adınızı girin (en az 5 karakter):", "Kullanıcı");
+                    if (userName == null) {
+                        System.exit(0); // Kullanıcı iptal ettiyse programı kapat
+                    }
+                    if (userName.length() >= 5) {
+                        out.println(userName);
+                        String response = in.readLine();
+                        if ("KABUL".equals(response)) {
+                            break;
+                        } else {
+                            JOptionPane.showMessageDialog(this, "Bu kullanıcı adı zaten kullanılıyor veya geçersiz.", "Hata", JOptionPane.ERROR_MESSAGE);
+                        }
+                    } else {
+                        JOptionPane.showMessageDialog(this, "Kullanıcı adı en az 5 karakter olmalıdır.", "Hata", JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+                connected = true;
+                messageArea.append("Sunucuya başarıyla bağlandı\n");
+
+                Thread readThread = new Thread(new Runnable() {
+                    public void run() {
+                        try {
+                            String response;
+                            while ((response = in.readLine()) != null) {
+                                messageArea.append(response + "\n");
+                            }
+                        } catch (IOException ex) {
+                            messageArea.append("Sunucuyla bağlantı kesildi\n");
+                            connected = false;
+                        }
+                    }
+                });
+                readThread.start();
+            } catch (IOException | NumberFormatException ex) {
+                messageArea.append("Bağlantı hatası: " + ex.getMessage() + "\n");
+                JOptionPane.showMessageDialog(this, "Bağlantı hatası: " + ex.getMessage(), "Hata", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(new Runnable() {
+            public void run() {
+                new TCPClientGUI().setVisible(true);
+            }
+        });
+    }
+}
