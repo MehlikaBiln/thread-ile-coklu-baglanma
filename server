@@ -1,0 +1,217 @@
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.io.*;
+import java.net.*;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.concurrent.*;
+
+public class TCPServerGUI extends JFrame {
+    private JLabel ipLabel;
+    private JTextField ipField;
+    private JLabel portLabel;
+    private JTextField portField;
+    private JButton startButton;
+    private JTextArea messageArea;
+    private JList<String> errorList;
+    private DefaultListModel<String> errorListModel;
+    private ServerSocket serverSocket;
+    private boolean serverRunning;
+    private ExecutorService threadPool;
+    private java.util.List<ClientHandler> clients;
+    private java.util.List<String> userNames;
+    private Map<String, java.util.List<String>> clientMessages;
+
+    public TCPServerGUI() {
+        setTitle("TCP Sunucu");
+        setSize(500, 300);
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setLayout(new BorderLayout());
+
+        JPanel topPanel = new JPanel(new GridLayout(3, 2));
+        ipLabel = new JLabel("IP Adresi:");
+        ipField = new JTextField("localhost");
+        portLabel = new JLabel("Port:");
+        portField = new JTextField();
+        startButton = new JButton("Başlat");
+
+        topPanel.add(ipLabel);
+        topPanel.add(ipField);
+        topPanel.add(portLabel);
+        topPanel.add(portField);
+        topPanel.add(startButton);
+
+        add(topPanel, BorderLayout.NORTH);
+
+        messageArea = new JTextArea();
+        JScrollPane scrollPane = new JScrollPane(messageArea);
+        add(scrollPane, BorderLayout.CENTER);
+
+        errorListModel = new DefaultListModel<>();
+        errorList = new JList<>(errorListModel);
+        JScrollPane errorScrollPane = new JScrollPane(errorList);
+        add(errorScrollPane, BorderLayout.EAST);
+
+        clients = new ArrayList<>();
+        userNames = new ArrayList<>();
+        clientMessages = new HashMap<>();
+
+        startButton.addActionListener(new ActionListener() {
+            public void actionPerformed(ActionEvent e) {
+                try {
+                    String ip = ipField.getText().trim();
+                    int port = Integer.parseInt(portField.getText().trim());
+                    if (serverRunning) {
+                        stopServer();
+                    } else {
+                        startServer(ip, port);
+                    }
+                } catch (Exception ex) {
+                    addErrorToList("Hata: " + ex.getMessage());
+                }
+            }
+        });
+    }
+
+    private void startServer(String ip, int port) throws IOException {
+        serverSocket = new ServerSocket(port, 50, InetAddress.getByName(ip));
+        serverRunning = true;
+        startButton.setText("Durdur");
+        threadPool = Executors.newCachedThreadPool();
+        addMessageToList("Sunucu başlatıldı: " + ip + ":" + port);
+
+        Thread serverThread = new Thread(new Runnable() {
+            public void run() {
+                try {
+                    while (serverRunning) {
+                        Socket clientSocket = serverSocket.accept();
+                        ClientHandler clientHandler = new ClientHandler(clientSocket);
+                        clients.add(clientHandler);
+                        threadPool.execute(clientHandler);
+                    }
+                } catch (Exception ex) {
+                    if (serverRunning) {
+                        addErrorToList("Hata: " + ex.getMessage());
+                    }
+                }
+            }
+        });
+        serverThread.start();
+    }
+
+    private void stopServer() throws IOException {
+        serverSocket.close();
+        serverRunning = false;
+        startButton.setText("Başlat");
+        threadPool.shutdown();
+        addMessageToList("Sunucu durduruldu");
+    }
+
+    private void addErrorToList(String error) {
+        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        String timestamp = dateFormat.format(new Date());
+        errorListModel.addElement(timestamp + " - " + error);
+    }
+
+    private void addMessageToList(String message) {
+        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        String timestamp = dateFormat.format(new Date());
+        messageArea.append(timestamp + " - " + message + "\n");
+    }
+
+    private void removeMessagesByUser(String userName) {
+        String text = messageArea.getText();
+        String[] lines = text.split("\n");
+        StringBuilder updatedText = new StringBuilder();
+
+        for (String line : lines) {
+            if (!line.contains(userName + ":")) {
+                updatedText.append(line).append("\n");
+            }
+        }
+
+        messageArea.setText(updatedText.toString());
+    }
+
+    private class ClientHandler implements Runnable {
+        private Socket clientSocket;
+        private PrintWriter out;
+        private BufferedReader in;
+        private String userName;
+
+        public ClientHandler(Socket clientSocket) {
+            this.clientSocket = clientSocket;
+            try {
+                this.out = new PrintWriter(clientSocket.getOutputStream(), true);
+                this.in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+            } catch (IOException e) {
+                addErrorToList("İstemci soketi oluşturulamadı: " + e.getMessage());
+            }
+        }
+
+        public void run() {
+            try {
+                // Kullanıcı adı alma işlemi
+                while (true) {
+                    userName = in.readLine();
+                    synchronized (userNames) {
+                        if (userName != null && userName.length() >= 5 && !userNames.contains(userName)) {
+                            userNames.add(userName);
+                            out.println("KABUL");
+                            clientMessages.put(userName, new ArrayList<>());
+                            break;
+                        } else {
+                            out.println("RED");
+                        }
+                    }
+                }
+
+                addMessageToList(userName + " bağlandı.");
+                broadcastMessage(userName + " bağlandı.");
+
+                // Mesajları alma ve iletme işlemi
+                String receivedMessage;
+                while ((receivedMessage = in.readLine()) != null) {
+                    String message = userName + ": " + receivedMessage;
+                    synchronized (clientMessages) {
+                        clientMessages.get(userName).add(message);
+                    }
+                    addMessageToList(message);
+                    broadcastMessage(message);
+                }
+            } catch (IOException ex) {
+                addErrorToList("İstemci hatası: " + ex.getMessage());
+            } finally {
+                try {
+                    clientSocket.close();
+                } catch (IOException ex) {
+                    addErrorToList("İstemci soketi kapatılırken hata: " + ex.getMessage());
+                }
+                // Kullanıcı adı ve istemciyi listelerden kaldırma
+                synchronized (userNames) {
+                    userNames.remove(userName);
+                    clientMessages.remove(userName);
+                }
+                clients.remove(this);
+                broadcastMessage(userName + " ayrıldı.");
+                removeMessagesByUser(userName);
+                addMessageToList(userName + " ayrıldı.");
+            }
+        }
+
+        private void broadcastMessage(String message) {
+            for (ClientHandler client : clients) {
+                client.out.println(message);
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(new Runnable() {
+            public void run() {
+                new TCPServerGUI().setVisible(true);
+            }
+        });
+    }
+}
